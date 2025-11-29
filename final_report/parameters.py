@@ -26,7 +26,7 @@ total_time = 1.0 # total simulation time
 # Solver parameters
 maximum_iter = 1000 # Maximum number of iterations
 dt = 0.01 # Time step # second
-totalTime = 50 # Total time # second
+totalTime = 5 # Total time # second
 
 # Variables related to plotting
 saveImage = 0 # Set to 1 to save images

@@ -1,14 +1,10 @@
 import numpy as np
-from elastic import *
-def objfun(q_guess, q_old, u_old, dt, tol, maximum_iter,
-           m, mMat, # inertia
-           EI, EA, # elastic stiffness
-           W, C, # external force
-           deltaL,
-           free_index):
+import forces as force
 
-  # q_new = q_old.copy() # Guess solution
-  q_new = q_guess.copy() # Guess solution
+def objfun(worm, q_old, u_old, dt, tol, maximum_iter, contract):
+
+  free_index = worm.freeIndex
+  q_new = q_old.copy() # Guess solution
 
   # Newton Raphson
   iter_count = 0 # number of iterations
@@ -16,24 +12,9 @@ def objfun(q_guess, q_old, u_old, dt, tol, maximum_iter,
   flag = 1 # if flag = 1, it is a good solution
 
   while error > tol:
-    # Inertia
-    F_inertia = m/dt * ((q_new - q_old) / dt - u_old)
-    J_inertia = mMat / dt ** 2
-
-    # Elastic forces: Stretching and Bending
-    Fs, Js = getFs(q_new, EA, deltaL)
-    Fb, Jb = getFb(q_new, EI, deltaL)
-    F_elastic = Fs + Fb
-    J_elastic = Js + Jb
-
-    # External forces
-    # Viscous force
-    Fv = - C @ ( q_new - q_old ) / dt
-    Jv = - C / dt
-
-    # Equations of motion
-    f = F_inertia - F_elastic - Fv - W
-    J = J_inertia - J_elastic - Jv
+    
+    # Compute force and Jacobian
+    f,J = force.getForceJacobian(q_new, q_old, u_old, dt, worm, contract)
 
     f_free = f[free_index]
     J_free = J[np.ix_(free_index, free_index)]
@@ -52,6 +33,7 @@ def objfun(q_guess, q_old, u_old, dt, tol, maximum_iter,
       print("Maximum number of iterations reached.")
       return q_new, flag
 
-    # u_new = (q_new - q_old) / dt # Velocity
-  return q_new, flag, f
+    u_new = (q_new - q_old) / dt # Velocity
+  return q_new, u_new, flag, f
+
 

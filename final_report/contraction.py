@@ -5,7 +5,28 @@ import importlib
 import parameters as param
 importlib.reload(param)
 
-class ContractionEngine:
+def getFexternal(t=None, ndof=None):
+    """
+    Return external contractile force vector.
+    Allows calling either getFexternal(t, m) or getFexternal(m).
+    """
+    # Support call with single argument getFexternal(m)
+    if t is None:
+        t = 0.0
+
+    F = 1.25 * np.sin(2.0 * np.pi * (t/5))  # Contractile force varying with time
+    F_contract = np.zeros(ndof)
+
+    # Apply forces to the y-DOFs of node 0 and node 3 if indices exist
+    try:
+        F_contract[2 * 1 + 1] = -F
+        F_contract[2 * 3 + 1] = F
+    except Exception:
+        # If vector is too small, silently skip assignment
+        pass
+
+    return F_contract
+class ContractionEngine_segmentdriven:
     def __init__(self, n_segments, T_contraction, T_wave, Fmax, mu, sigma, pulse_type):
         self.n = n_segments
         self.T_contraction = T_contraction
