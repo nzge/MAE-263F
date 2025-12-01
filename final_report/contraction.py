@@ -88,6 +88,7 @@ def getContract(worm, t=None, T_wave=2.0, wavelength=1.0, wave_type='traveling')
         if top_y_dof < worm.ndof and bot_y_dof < worm.ndof:
             F_contract[top_y_dof] = -F_seg  # push top down
             F_contract[bot_y_dof] = +F_seg  # push bottom up
+        
 
     return F_contract
 

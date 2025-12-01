@@ -70,6 +70,7 @@ def solver_with_predictor_corrector(worm, dt, maxTime, tol, maximum_iter, contra
         if step == len(t) - 2:
             worm.plot(t_new)
 
+        F_contract = np.zeros(worm.ndof)
         # Get contraction force
         if contractType == 'single_segment':
             F_contract = contract.getContract_single_segment(worm, t_new)
@@ -85,7 +86,7 @@ def solver_with_predictor_corrector(worm, dt, maxTime, tol, maximum_iter, contra
         if flag == -1:
             print("Maximum number of iterations reached.")
             break
-
+        
         # === CHECK FOR CONTACT CHANGES ===
         contact_changed = False
         
@@ -123,9 +124,15 @@ def solver_with_predictor_corrector(worm, dt, maxTime, tol, maximum_iter, contra
         frames.append(q_new.copy())
         times.append(t_new)
         
+        displacement = q_new.flatten() - worm.q.flatten()
+        work_step = F_contract.dot(displacement)
+        worm.workDone = np.append(worm.workDone, work_step)
+        
         worm.q = q_new
         worm.u = u_new
         worm.residuals = f.copy()
+
+        
 
     return frames, times
 

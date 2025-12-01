@@ -3,8 +3,10 @@ import pandas as pd
 from IPython.display import display # Only for iPython
 import importlib
 
+import helper as helper
 import parameters as param
 importlib.reload(param)
+importlib.reload(helper)
 
 def getForceJacobian(q_new, q_old, u_old, dt, worm, contractionEngine):
   
@@ -30,7 +32,7 @@ def getForceJacobian(q_new, q_old, u_old, dt, worm, contractionEngine):
   Jv = 0
 
   # Ground contact and friction
-  F_friction = getFriction(worm)
+  F_friction = getFriction(worm, q_old, dt)
 
   # Equations of motion
   f = F_inertia - F_elastic - Fv - F_friction - contractionEngine
@@ -88,27 +90,46 @@ def print_force_summary(worm, q_new, F_inertia, F_elastic, F_contract, F_frictio
 
 #-----------------------------------------------------------------------#
 
-def getFriction(worm):
+def getFriction(worm, q_old, dt):
+    """
+    Anisotropic Coulomb friction for directional locomotion.
+    
+    For RIGHTWARD motion:
+    - LOW friction when moving right (easy to slide forward)
+    - HIGH friction when moving left (anchor/grip to push off)
+    """
     F_friction = np.zeros(worm.ndof)
-    N = np.zeros(worm.ndof)
-    N = worm.residuals[worm.fixedIndex]
-
+    
+    # Anisotropic friction coefficients
+    # Ratio > 1 means harder to move backward than forward
+    mu_forward = param.mu_sliding * 0.3   # Moving RIGHT: low friction (slide easy)
+    mu_backward = param.mu_sliding * 2.0  # Moving LEFT: high friction (grip/anchor)
+    
+    # Only apply friction to nodes in ground contact
     for node in range(worm.nv):
-        x_dof = 2 * node
-        y_dof = 2 * node + 1
-
-        # === FRICTION FORCE ===
-        v_x = worm.u[x_dof] # Velocity in X direction
-        # Tangential force trying to move the node
-        # (This would be the X-component of elastic + contraction forces)
-        # For simplicity, use velocity-based friction:
-        if abs(v_x) > 1e-6:  # Sliding
-            # Kinetic friction opposes motion
-            F_friction[x_dof] = -param.mu_sliding * N[y_dof] * np.sign(v_x)
-        else:
-            # Static friction (simplified - just high resistance)
-            # In full implementation, you'd check if applied force exceeds μ_s * N
-            pass  # Static case handled by stick constraint or regularization
+        y_dof = worm.dim * node + 1
+        x_dof = worm.dim * node
+        
+        # Check if this node's Y is constrained (in contact)
+        if y_dof in worm.fixedIndex:
+            # Use stored reaction force from previous solve
+            if hasattr(worm, 'reaction_forces') and y_dof < len(worm.reaction_forces):
+                N = abs(worm.reaction_forces[y_dof])  # Normal force magnitude
+            else:
+                N = worm.m[y_dof] * 9.8  # Fallback: use weight as estimate
+            
+            # Velocity in X direction
+            if hasattr(worm.u, 'shape') and len(worm.u.shape) > 1:
+                v_x = worm.u[node, 0]
+            else:
+                v_x = worm.u[x_dof] if x_dof < len(worm.u) else 0
+            
+            if N > 0:
+                if v_x > 1e-6:  # Moving RIGHT (forward) - low friction
+                    F_friction[x_dof] = -mu_forward * N * np.sign(v_x)
+                elif v_x < -1e-6:  # Moving LEFT (backward) - high friction
+                    F_friction[x_dof] = -mu_backward * N * np.sign(v_x)
+                # else: static friction (v_x ≈ 0) - could add static friction here
     return F_friction
 
 # Spring
@@ -359,7 +380,7 @@ def hessEb(xkm1, ykm1, xk, yk, xkp1, ykp1, curvature0, l_k, EI):
                   (kb_o_d2f + kb_o_d2f.T) / (4 * norm2_f)
     D2kappa1DeDf = -kappa1 / (chi * norm_e * norm_f) * (Id3 + np.outer(te, tf)) \
                   + 1.0 / (norm_e * norm_f) * (2 * kappa1 * tt_o_tt - tf_c_d2t_o_tt + \
-                  tt_o_te_c_d2t - crossMat(tilde_d2))
+                  tt_o_te_c_d2t - helper.crossMat(tilde_d2))
     D2kappa1DfDe = D2kappa1DeDf.T
 
     # Populate the Hessian of kappa
@@ -411,48 +432,3 @@ def getFb(q, EI, deltaL):
     Jb[np.ix_(ind, ind)] -= hessEnergy # index vector: 0:6
 
   return Fb, Jb
-
-def getGroundContactAndFriction(worm, q_new, q_old, dt, ground_y=0.0, 
-                                 k_ground=1e4, mu_static=0.12, mu_sliding=0.1):
-    """
-    Compute ground contact (penalty) and Coulomb friction forces.
-    
-    Returns:
-        F_contact: normal contact force (Y direction)
-        F_friction: tangential friction force (X direction)
-        J_contact: Jacobian of contact force
-    """
-    F_contact = np.zeros(worm.ndof)
-    F_friction = np.zeros(worm.ndof)
-    J_contact = np.zeros((worm.ndof, worm.ndof))
-    
-    for node in range(worm.nv):
-        x_dof = 2 * node
-        y_dof = 2 * node + 1
-        
-        y_pos = q_new[y_dof]
-        penetration = ground_y - y_pos
-        
-        if penetration > 0:  # Node is in/below ground
-            # === NORMAL FORCE (penalty spring) ===
-            N = k_ground * penetration  # Positive = pushing up
-            F_contact[y_dof] = N
-            J_contact[y_dof, y_dof] = -k_ground
-            
-            # === FRICTION FORCE ===
-            # Velocity in X direction
-            v_x = (q_new[x_dof] - q_old[x_dof]) / dt
-            
-            # Tangential force trying to move the node
-            # (This would be the X-component of elastic + contraction forces)
-            # For simplicity, use velocity-based friction:
-            
-            if abs(v_x) > 1e-6:  # Sliding
-                # Kinetic friction opposes motion
-                F_friction[x_dof] = -mu_sliding * N * np.sign(v_x)
-            else:
-                # Static friction (simplified - just high resistance)
-                # In full implementation, you'd check if applied force exceeds μ_s * N
-                pass  # Static case handled by stick constraint or regularization
-    
-    return F_contact, F_friction, J_contact
