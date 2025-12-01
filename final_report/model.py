@@ -43,10 +43,10 @@ class WormModel:
 			self.springs[5*i+3] = [node1_index, bot_connector_index] # bottom left link
 			self.springs[5*i+4] = [bot_connector_index, node2_index] # bottom right link
 			self.spring_k[5*i] = 13 # spring constant
-			self.spring_k[5*i+1] = 1e6 # link constant
-			self.spring_k[5*i+2] = 1e6 # link constant
-			self.spring_k[5*i+3] = 1e6 # link constant
-			self.spring_k[5*i+4] = 1e6 # link constant
+			self.spring_k[5*i+1] = 1e4 # link constant
+			self.spring_k[5*i+2] = 1e4 # link constant
+			self.spring_k[5*i+3] = 1e4 # link constant
+			self.spring_k[5*i+4] = 1e4 # link constant
 			self.spring_l0[5*i] = self.deltaL # rest length
 			self.spring_l0[5*i+1] = np.sqrt( (self.deltaL/2)**2 + (y_pos)**2 ) # rest length
 			self.spring_l0[5*i+2] = np.sqrt( (self.deltaL/2)**2 + (y_pos)**2 ) # rest length
@@ -58,6 +58,33 @@ class WormModel:
 		self.nv = self.q.shape[0]
 		self.ndof = self.dim * self.nv
 		self.ne = len(self.springs)
+
+		# ============ NODE TYPE CLASSIFICATION ============
+		# Identify which nodes are main nodes vs connectors
+		# Main nodes: indices 0, 3, 6, 9, ... (every 3rd starting from 0)
+		# Top connectors: indices 1, 4, 7, 10, ... (every 3rd starting from 1)
+		# Bot connectors: indices 2, 5, 8, 11, ... (every 3rd starting from 2)
+		self.is_main_node = np.zeros(self.nv, dtype=bool)
+		self.is_connector = np.zeros(self.nv, dtype=bool)
+		self.main_node_indices = []
+		self.connector_indices = []
+		
+		for k in range(self.nv):
+			if k % 3 == 0:  # Main nodes at 0, 3, 6, ...
+				self.is_main_node[k] = True
+				self.main_node_indices.append(k)
+			else:  # Connectors at 1, 2, 4, 5, 7, 8, ...
+				self.is_connector[k] = True
+				self.connector_indices.append(k)
+		
+		self.main_node_indices = np.array(self.main_node_indices)
+		self.connector_indices = np.array(self.connector_indices)
+		
+		# ============ TOGGLE FLAGS ============
+		# Set these to True/False to include/exclude connectors from physics
+		self.connectors_have_mass = False      # Set True to give connectors mass
+		self.connectors_have_gravity = False   # Set True to apply gravity to connectors
+		self.connectors_have_damping = False   # Set True to apply damping to connectors
 
 		# Boundary Conditions # Set of all DOFs
 		self.freeIndex = np.setdiff1d(np.arange(self.ndof), fixedDOFs) # All the DOFs are free except the fixed ones
@@ -75,33 +102,45 @@ class WormModel:
 		Fmax = k_spring * stretch_fraction * deltaL / (4 * cot_theta)
 		self.Fmax = Fmax
 
-		# Radii of spheres (given)
+		# Radii of spheres
 		R = np.zeros(self.nv)
+		R_main = self.deltaL / 1000      # Radius for main nodes
+		R_connector = self.deltaL / 10000  # Radius for connectors (can set to 0 or small)
 		for k in range(self.nv):
-			R[k] = self.deltaL/10 # meter
+			if self.is_main_node[k]:
+				R[k] = R_main
+			else:
+				R[k] = R_connector if self.connectors_have_mass else 1e-10  # tiny if no mass
+		self.R = R
 
 		# Mass vector and matrix
-		m = np.zeros( 2 * self.nv )
-		for k in range(0, self.nv):
-			m[2*k] = 4/3 * np.pi * R[k]**3 * param.rho_metal # mass of k-th node along x
-			m[2*k + 1] = 4/3 * np.pi * R[k]**3 * param.rho_metal # mass of k-th node along y
+		m = np.zeros(self.dim * self.nv)
+		for k in range(self.nv):
+			if self.is_main_node[k] or self.connectors_have_mass:
+				node_mass = 4/3 * np.pi * R[k]**3 * param.rho_metal
+			else:
+				node_mass = 1e-10  # tiny mass for connectors (avoid division by zero)
+			m[self.dim*k] = node_mass
+			m[self.dim*k + 1] = node_mass
 		self.m = m
 		self.mMat = np.diag(m)
 		
 		# Gravity (external force)
-		W = np.zeros( 2 * self.nv)
-		g = np.array([0, -9.8]) # m/s^2
-		for k in range(0, self.nv):
-			W[2*k] = m[2*k] * g[0] # Weight along x
-			W[2*k+1] = m[2*k+1] * g[1] # Weight along y
-		# Gradient of W = 0
+		W = np.zeros(self.dim * self.nv)
+		g = np.array([0, -9.8, 0])[:self.dim]  # m/s^2
+		for k in range(self.nv):
+			if self.is_main_node[k] or self.connectors_have_gravity:
+				for d in range(self.dim):
+					W[self.dim*k + d] = m[self.dim*k + d] * g[d]
+			# else: W stays 0 for connectors
 		self.W = W
 
 		# Viscous damping (external force)
 		C = np.zeros((2 * self.nv, 2 * self.nv))
-		for k in range(0, self.nv):
-			C[2*k, 2*k] = 6.0 * np.pi * param.visc * R[k] # Damping along x for k-th node
-			C[2*k+1, 2*k+1] = 6.0 * np.pi * param.visc * R[k] # Damping along y for k-th node
+		for k in range(self.nv):
+			if self.is_main_node[k] or self.connectors_have_damping:
+				C[2*k, 2*k] = 6.0 * np.pi * param.visc * R[k]
+				C[2*k+1, 2*k+1] = 6.0 * np.pi * param.visc * R[k]
 		self.c = C
 		
 	def update_internal_state(self, q):
@@ -235,14 +274,14 @@ class WormModel:
 		plt.show()
 
 
-	def animate_worm(self, frames, times, save_dir="animations"):
+	def animate_worm(self, frames, times, save_dir="animations", target_fps=20, speedup=1.0):
 		"""
 		Parameters:
-		- worm: WormModel instance
 		- frames: list of q arrays from the solver
 		- times: corresponding time array from the solver
 		- save_dir: subdirectory to save GIF
-		- base_name: base filename (will append (1), (2), etc. if exists)
+		- target_fps: target frames per second for GIF (default 20, good for GIFs)
+		- speedup: playback speed multiplier (1.0 = real-time, 2.0 = 2x speed)
 		"""
 
 		# Ensure save directory exists
@@ -256,6 +295,24 @@ class WormModel:
 			counter += 1
 		filepath = os.path.join(save_dir, fname)
 
+		# === SUBSAMPLE FRAMES ===
+		dt_sim = np.mean(np.diff(times))
+		total_time = times[-1] - times[0]
+		
+		# Calculate frame skip to achieve target_fps at given speedup
+		# We want: (num_output_frames / target_fps) = total_time / speedup
+		# So: num_output_frames = target_fps * total_time / speedup
+		num_output_frames = int(target_fps * total_time / speedup)
+		num_output_frames = max(2, min(num_output_frames, len(frames)))  # clamp
+		
+		# Subsample indices
+		frame_indices = np.linspace(0, len(frames)-1, num_output_frames, dtype=int)
+		frames_subset = [frames[i] for i in frame_indices]
+		
+		print(f"Animation: {len(frames)} total frames → {len(frames_subset)} output frames")
+		print(f"Playback: {total_time:.2f}s sim time at {speedup}x speed = {total_time/speedup:.2f}s GIF")
+		# ========================
+
 		# Figure setup
 		fig, ax = plt.subplots(figsize=(8,4))
 		ax.set_xlabel("x")
@@ -266,31 +323,27 @@ class WormModel:
 		# Plot objects
 		artists = self.plot_objects(ax=ax)
 
-		def flatten_artists(): # Helper to flatten artists dict to list for FuncAnimation
+		def flatten_artists():
 			return [artists["nodes"], artists["conn"]] \
 				+ artists["springs"] \
 				+ artists["links"] \
 				+ artists["top"] \
 				+ artists["bot"]
 		
-		def init(): # Function to initialize animation
+		def init():
 			return flatten_artists()
 
 		def update(frame_idx):
-			q = frames[frame_idx]
+			q = frames_subset[frame_idx]
 			self.q = q
-			self.plot_objects(ax=ax, artists=artists)  # update artists in place
+			self.plot_objects(ax=ax, artists=artists)
 			return flatten_artists()
 
-		# Calculate fps based on simulation times
-		dt_sim = np.mean(np.diff(times))
-		fps = max(1, int(1/dt_sim))
-
-		ani = FuncAnimation(fig, update, frames=len(frames)-1,
-							init_func=init, blit=True, interval=1000/fps)
+		ani = FuncAnimation(fig, update, frames=len(frames_subset),
+							init_func=init, blit=True, interval=1000/target_fps)
 
 		# Save as GIF
-		ani.save(filepath, writer=PillowWriter(fps=fps))
+		ani.save(filepath, writer=PillowWriter(fps=target_fps))
 		print(f"Animation saved to {filepath}")
 		
 		return ani

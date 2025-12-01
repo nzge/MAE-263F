@@ -5,8 +5,8 @@ length=1.0 # length of the worm
 n=6 # number of segments
  
 # Densities
-rho_metal = 7000 # Density of metal # kg/m^3
-rho_gl = 1000 # kg/m^3
+rho_metal = 10 # Density of metal # kg/m^3
+rho_gl = 10 # kg/m^3
 rho = rho_metal  - rho_gl # Difference in density # kg/m^3
 
 r0 = 1e-3 # Cross sectional radius # meter

@@ -1,8 +1,68 @@
 from helper import crossMat
 
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-from IPython.display import clear_output # Only for iPython
+from IPython.display import clear_output, display # Only for iPython
+
+def print_force_summary(worm, q_new, F_inertia, F_elastic, F_contract, f_residual, verbose=True, show_all=False):
+    """
+    Pretty-print force components and positions as a pandas DataFrame.
+    
+    Parameters:
+    -----------
+    worm : WormModel
+    q_new : ndarray
+        Current position vector (flattened DOFs)
+    F_inertia, F_elastic, F_contract, f_residual : ndarray
+        Force components
+    verbose : bool
+        If False, skip printing entirely
+    show_all : bool
+        If True, show all DOFs. If False, only show non-zero rows.
+    """
+    if not verbose:
+        return
+    
+    nv = worm.nv
+    # Build row labels: Node 0 X, Node 0 Y, Node 1 X, ...
+    labels = []
+    for i in range(nv):
+        node_type = "main" if i % 3 == 0 else ("top" if i % 3 == 1 else "bot")
+        labels.append(f"N{i} ({node_type}) X")
+        labels.append(f"N{i} ({node_type}) Y")
+    
+    # Mark fixed DOFs
+    fixed_marker = np.array(['free'] * worm.ndof)
+    fixed_marker[worm.fixedIndex] = 'FIXED'
+    
+    df = pd.DataFrame({
+        'q_new': q_new,
+        'F_inertia': F_inertia,
+        'F_elastic': F_elastic,
+        'F_contract': F_contract,
+        'f_residual': f_residual,
+        'status': fixed_marker
+    }, index=labels)
+    
+    # Only show rows with non-zero values (for cleaner output) unless show_all=True
+    if not show_all:
+        mask = (df[['F_inertia', 'F_elastic', 'F_contract', 'f_residual']].abs() > 1e-10).any(axis=1)
+        df_filtered = df[mask]
+    else:
+        df_filtered = df
+    
+    pd.set_option('display.float_format', '{:.6f}'.format)
+    pd.set_option('display.max_rows', None)
+    pd.set_option('display.width', None)
+    
+    print("\n" + "="*80)
+    print("FORCE & POSITION SUMMARY" + (" (non-zero DOFs only)" if not show_all else " (all DOFs)"))
+    print("="*80)
+    display(df_filtered)
+    print(f"\nResidual norm: {np.linalg.norm(f_residual):.2e}")
+    print(f"Free DOF residual norm: {np.linalg.norm(f_residual[worm.freeIndex]):.2e}")
+    print("="*80 + "\n")
 
 def getForceJacobian(q_new, q_old, u_old, dt, worm, contractionEngine):
   m = worm.m
@@ -33,15 +93,8 @@ def getForceJacobian(q_new, q_old, u_old, dt, worm, contractionEngine):
   f = F_inertia - F_elastic - Fv - contractionEngine
   J = J_inertia - J_elastic - Jv
 
-  print('f: ', f)
-	# print('F_inertia: ', F_inertia)
-  print('F_elastic: ', F_elastic)
-  # print('Fs: ', Fs)
-  # print('F_elastic shape: ', F_elastic.shape)
-  # print('F_inertia shape: ', F_inertia.shape)
-  # print('Fv: ', Fv)
-  print('contractionEngine: ', contractionEngine)
-
+  # Pretty-print force summary (set verbose=False to disable, show_all=True to see all DOFs)
+  print_force_summary(worm, q_new, F_inertia, F_elastic, contractionEngine, f, verbose=False, show_all=False)
   return f, J
 
 # Spring

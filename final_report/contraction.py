@@ -94,12 +94,12 @@ def getContract_single_segment(worm, t=None):
     if t is None:
         t = 0.0
 
-    F = 0.04 * np.sin(2.0 * np.pi * (t/5))
+    F = 0.8 * np.sin(2.0 * np.pi * (t/2))
     F_contract = np.zeros(worm.ndof)
     
     try:
-        F_contract[2 * 1 + 1] = -F
-        F_contract[2 * 2 + 1] = F
+        F_contract[worm.dim * 1 + 1] = -F
+        F_contract[worm.dim * 2 + 1] = F
     except Exception:
         pass
 
