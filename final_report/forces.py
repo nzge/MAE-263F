@@ -16,7 +16,7 @@ def getForceJacobian(q_new, q_old, u_old, dt, worm, contractionEngine):
   J_inertia = mMat / dt ** 2
 
   # Elastic forces: Stretching and Bending
-  Fs, Js = getFs(worm)
+  Fs, Js = getFs(worm, q_new)
   #Fb, Jb = getFb(q_new, k, deltaL)
   Fb, Jb = 0, 0
   F_elastic = Fs + Fb
@@ -26,62 +26,45 @@ def getForceJacobian(q_new, q_old, u_old, dt, worm, contractionEngine):
   #Fv = - C @ ( q_new - q_old ) / dt
   #Jv = - C / dt
 
-  F_elastic = 0
-  J_elastic = 0
   Fv = 0
   Jv = 0
 
   # Equations of motion
-  f = F_inertia - F_elastic - Fv - Fs - contractionEngine
-  J = J_inertia - J_elastic - Jv - Js
+  f = F_inertia - F_elastic - Fv - contractionEngine
+  J = J_inertia - J_elastic - Jv
+
+  print('f: ', f)
+	# print('F_inertia: ', F_inertia)
+  print('F_elastic: ', F_elastic)
+  # print('Fs: ', Fs)
+  # print('F_elastic shape: ', F_elastic.shape)
+  # print('F_inertia shape: ', F_inertia.shape)
+  # print('Fv: ', Fv)
+  print('contractionEngine: ', contractionEngine)
+
   return f, J
 
 # Spring
-def getFs(worm):
-  q, stiffness_matrix, index_matrix, l_k = worm.get_internal_state()
-  f_spring = np.zeros_like(q)
-  J_spring = np.zeros((worm.ndof,worm.ndof))
-  for i in range(stiffness_matrix.shape[0]):
-    ind = index_matrix[i]
-    xi = ind[0]
-    yi = ind[1]
-    xj = ind[2]
-    yj = ind[3]
-    stiffness = stiffness_matrix[i]
-    f_spring[ind] += gradEs(xi, yi, xj, yj, l_k[i], stiffness)
-    J_spring[np.ix_(ind, ind)] += hessEs(xi, yi, xj, yj, l_k[i], stiffness)
-    return f_spring, J_spring
-
-def getFs(worm):
-  # q - DOF vector of size N
-  # EA - stretching stiffness
-  # deltaL - undeformed reference length (assume to be a scalar for this simple example)
-  # Output:
-  # Fs - a vector (negative gradient of elastic stretching force)
-  # Js - a matrix (negative hessian of elastic stretching force)
-	
-  q, stiffness_matrix, index_matrix, l_k = worm.get_internal_state()
+def getFs(worm, q):
+  """Compute spring forces at configuration q (flattened DOF vector)"""
+  f_spring = np.zeros(worm.ndof)
+  J_spring = np.zeros((worm.ndof, worm.ndof))
   
-  ndof = q.size # Number of DOFs
-  N = ndof // 2 # Number of nodes
+  for i in range(worm.ne):
+    ind = worm.springs[i]
+    # Read from q parameter, not worm.q
+    xi = q[2*ind[0]]
+    yi = q[2*ind[0]+1]
+    xj = q[2*ind[1]]
+    yj = q[2*ind[1]+1]
+    indices = [2*ind[0], 2*ind[0]+1, 2*ind[1], 2*ind[1]+1]
+    stiffness = worm.spring_k[i]
 
-  Fs = np.zeros(ndof) # stretching force
-  Js = np.zeros((ndof, ndof))
+    f_spring[indices] += gradEs(xi, yi, xj, yj, worm.spring_l0[i], stiffness)
+    J_spring[np.ix_(indices,indices)] += hessEs(xi, yi, xj, yj, worm.spring_l0[i], stiffness)
 
-  for i in range(stiffness_matrix.shape[0]):
-      # May need to modify if network of beams
-      # k-th stretching spring (USE A LOOP for the general case
-      xkm1 = index_matrix[2*i] # x coordinate of the first node
-      ykm1 = index_matrix[2*i+1] # y coordinate of the first node
-      xk = 	index_matrix[2*i+2] # x coordinate of the second node
-      yk = index_matrix[2*i+3] # y coordinate of the second node
-      ind = np.arange(2*i, 2*i+4) # 0, 1, 2, 3 for i = 0
-      gradEnergy = gradEs(xkm1, ykm1, xk, yk, l_k[i], i)
-      hessEnergy = hessEs(xkm1, ykm1, xk, yk, l_k[i], i)
-      Fs[ind] -= gradEnergy # force = - gradient of energy. Fs is the stretching force
-      Js[np.ix_(ind, ind)] -= hessEnergy # index vector: 0:4
+  return f_spring, J_spring  # OUTSIDE the loop!
 
-  return Fs, Js
 
 def gradEs(xk, yk, xkp1, ykp1, l_k, k):
     """
@@ -98,8 +81,8 @@ def gradEs(xk, yk, xkp1, ykp1, l_k, k):
     Returns:
     - F (np.array): Gradient array
     """
-    print("Calculating gradEs...")
-    print(xk, yk, xkp1, ykp1, l_k, k)
+    # print("Calculating gradEs...")
+    # print(xk, yk, xkp1, ykp1, l_k, k)
     
     F = np.zeros(4)
     F[0] = -(1.0 - np.sqrt((xkp1 - xk)**2.0 + (ykp1 - yk)**2.0) / l_k) * ((xkp1 - xk)**2.0 + (ykp1 - yk)**2.0)**(-0.5) / l_k * (-2.0 * xkp1 + 2.0 * xk)

@@ -1,10 +1,13 @@
 import numpy as np
 import forces as force
 
-def objfun(worm, q_old, u_old, dt, tol, maximum_iter, contract):
+def objfun(worm, dt, tol, maximum_iter, contract):
 
   free_index = worm.freeIndex
-  q_new = q_old.copy() # Guess solution
+
+  q_old = worm.q.flatten()
+  u_old = worm.u.flatten()
+  q_new = q_old.copy()
 
   # Newton Raphson
   iter_count = 0 # number of iterations
@@ -22,6 +25,7 @@ def objfun(worm, q_old, u_old, dt, tol, maximum_iter, contract):
     # Newton's update (all DOFs are FREE)
     dq_free = np.linalg.solve(J_free, f_free)
     q_new[free_index] = q_new[free_index] - dq_free
+    u_new = (q_new - q_old) / dt # Velocity
 
     # Get the error
     error = np.linalg.norm(f_free)
@@ -31,9 +35,10 @@ def objfun(worm, q_old, u_old, dt, tol, maximum_iter, contract):
     if iter_count > maximum_iter:
       flag = -1 # Return with an error signal
       print("Maximum number of iterations reached.")
-      return q_new, flag
+      return q_new.reshape(worm.nv, worm.dim), u_new.reshape(worm.nv, worm.dim), flag, f
 
-    u_new = (q_new - q_old) / dt # Velocity
-  return q_new, u_new, flag, f
+    
+
+  return q_new.reshape(worm.nv, worm.dim), u_new.reshape(worm.nv, worm.dim), flag, f
 
 

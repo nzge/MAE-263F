@@ -1,7 +1,7 @@
 import numpy as np
 
 # Parameters for the worm model 
-length=0.25 # length of the worm
+length=1.0 # length of the worm
 n=6 # number of segments
  
 # Densities
@@ -24,10 +24,11 @@ dt = 0.01 # time step size
 total_time = 1.0 # total simulation time
 
 # Solver parameters
-maximum_iter = 1000 # Maximum number of iterations
+maximum_iter = 100 # Maximum number of iterations
 dt = 0.01 # Time step # second
 totalTime = 5 # Total time # second
 
 # Variables related to plotting
 saveImage = 0 # Set to 1 to save images
-plotStep = 250 # Every 5-th step will be plotted
+n_plot = 5 
+plotStep = (totalTime/dt) / n_plot 

@@ -1,72 +1,80 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import parameters as param 
-
+from matplotlib.animation import FuncAnimation, PillowWriter
+import os
 class WormModel:
-	def __init__(self, length, n_segments):
+	def __init__(self, name, length, n_segments, dim=2, fixedDOFs=[], stretch_fraction=0.1):
+		self.name = name
 		self.n = n_segments
 		self.length = length
 		self.deltaL = length / n_segments
 		
-		#Geometry#
-		# Nodes
-		self.nodes = np.zeros((n_segments+1, 2))
-		self.nodes[0] = [0.0, 0.0]
+		self.dim = dim  # Set to 2 or 3 for 2D/3D
+		self.q = np.zeros((n_segments*3+1, self.dim))
+		self.q[0] = np.zeros(self.dim)
+		
+		# Springs: simple parallel arrays for easy vectorized computation
+		# Each segment has 5 springs: 1 horizontal spring + 4 links
+		n_springs = n_segments * 5
+		self.springs = np.zeros((n_springs, 2), dtype=np.int32)  # [p1_idx, p2_idx] per spring
+		self.spring_k = np.zeros(n_springs)   # spring constants
+		self.spring_l0 = np.zeros(n_springs)  # rest lengths
+		
 		for i in range(1, n_segments+1):
-				self.nodes[i, 0] = i * self.deltaL
-				self.nodes[i, 1] = 0.0
-		
-		# Springs
-		dt = np.dtype([("p1", "f8", (2,)), ("p2", "f8", (2,)), ("k", "f8"), ("l0", "f8")])
-		self.springs = np.zeros(n_segments, dtype=dt)
-		k_s = 13 # segment spring stiffness
+			node_index = 3*i
+			self.q[node_index] = [i * self.deltaL , 0.0, 0.0][:self.dim] # node position
+
 		for i in range(n_segments):
-				self.springs["p1"][i] = self.nodes[i]
-				self.springs["p2"][i] = self.nodes[i+1]
-				self.springs["k"][i] = k_s
-				self.springs["l0"][i] = self.deltaL
+			node1_index = 3*i
+			node2_index = 3*(i+1)
+			top_connector_index = 3*i + 1
+			bot_connector_index = 3*i + 2
+
+			x_pos = (self.q[node1_index][0] + self.q[node2_index][0]) / 2
+			y_pos = np.sqrt((self.deltaL/2)**2 - (self.deltaL/4)**2)
+			self.q[top_connector_index] = [x_pos, y_pos, 0.0][:self.dim] # top connector position
+			self.q[bot_connector_index] = [x_pos, -y_pos, 0.0][:self.dim] # bottom connector position
+	
+			#springs
+			self.springs[5*i] = [node1_index, node2_index] # horizontal spring
+			self.springs[5*i+1] = [node1_index, top_connector_index] # top left link
+			self.springs[5*i+2] = [top_connector_index, node2_index] # top right link
+			self.springs[5*i+3] = [node1_index, bot_connector_index] # bottom left link
+			self.springs[5*i+4] = [bot_connector_index, node2_index] # bottom right link
+			self.spring_k[5*i] = 13 # spring constant
+			self.spring_k[5*i+1] = 1e6 # link constant
+			self.spring_k[5*i+2] = 1e6 # link constant
+			self.spring_k[5*i+3] = 1e6 # link constant
+			self.spring_k[5*i+4] = 1e6 # link constant
+			self.spring_l0[5*i] = self.deltaL # rest length
+			self.spring_l0[5*i+1] = np.sqrt( (self.deltaL/2)**2 + (y_pos)**2 ) # rest length
+			self.spring_l0[5*i+2] = np.sqrt( (self.deltaL/2)**2 + (y_pos)**2 ) # rest length
+			self.spring_l0[5*i+3] = np.sqrt( (self.deltaL/2)**2 + (y_pos)**2 ) # rest length
+			self.spring_l0[5*i+4] = np.sqrt( (self.deltaL/2)**2 + (y_pos)**2 ) # rest length
+
+		self.q0 = self.q.copy() # initial position
+		self.u0 = np.zeros_like(self.q0) # initial velocity
+		self.nv = self.q.shape[0]
+		self.ndof = self.dim * self.nv
+		self.ne = len(self.springs)
+
+		# Boundary Conditions # Set of all DOFs
+		self.freeIndex = np.setdiff1d(np.arange(self.ndof), fixedDOFs) # All the DOFs are free except the fixed ones
+		self.fixedIndex = fixedDOFs # Fixed DOFs
+		self.isFixed = np.zeros(self.ndof)
+		self.groundPosition = np.min(self.q[:, 1]) - 0.10 # Location of ground along y axis
 		
-		# Connectors & links
-		self.connectors = np.zeros((n_segments*2, 2))
-		self.links = np.zeros(n_segments*4, dtype=dt)
-		k_l = 1e4
-		for i in range(n_segments):
-				x_pos = (self.nodes[i][0] + self.nodes[i+1][0]) / 2
-				y_pos = np.sqrt((self.deltaL/2)**2 - (self.deltaL/4)**2)
-				n1, n2 = self.nodes[i], self.nodes[i+1]
-				top_connector = [x_pos, y_pos]
-				bottom_connector = [x_pos, -y_pos]
-				self.connectors[2*i] = top_connector
-				self.connectors[2*i+1] = bottom_connector
-				l0 = np.sqrt( (self.deltaL/2)**2 + (y_pos)**2 )
-
-				self.links[4*i] = (n1, top_connector, k_l, l0)
-				self.links[4*i+1] = (top_connector, n2, k_l, l0)
-				self.links[4*i+2] = (n1, bottom_connector, k_l, l0)
-				self.links[4*i+3] = (bottom_connector, n2, k_l, l0)
-		
-
-		self.nv = self.nodes.shape[0] + self.connectors.shape[0]  # nodes + connectors
-		self.ne = self.springs.shape[0] + self.links.shape[0]      # springs + links
-		self.ndof = 2 * self.nv                                    # 2D, x and y per vertex
-
-		# Initial conditions
-		q0, _ , _ , _ = self.get_internal_state()
-		self.q0 = q0 # initial position
-		u0 = np.zeros(2 * self.nv) # old velocity
-		self.u0 = u0 # initial velocity
-
-		# Boundary Conditions
-		all_DOFs = np.arange(self.ndof) # Set of all DOFs
-		fixed_index = np.array([ ]) # Fixed DOFs
-		free_index = np.setdiff1d(all_DOFs, fixed_index) # All the DOFs are free except the fixed ones
-		self.freeIndex = free_index
-		self.fixedIndex = fixed_index
-
-		isFixed = np.zeros(self.nv)
-		self.isFixed = isFixed
-
 		#-----------Forces------------#
+
+		"""Calculate safe Fmax based on geometry."""
+		deltaL = self.deltaL
+		h = np.sqrt((deltaL/2)**2 - (deltaL/4)**2)
+		cot_theta = (deltaL/2) / h  # ≈ 1.15
+		k_spring = self.spring_k[0]  # horizontal spring stiffness
+		Fmax = k_spring * stretch_fraction * deltaL / (4 * cot_theta)
+		self.Fmax = Fmax
+
 		# Radii of spheres (given)
 		R = np.zeros(self.nv)
 		for k in range(self.nv):
@@ -97,119 +105,192 @@ class WormModel:
 		self.c = C
 		
 	def update_internal_state(self, q):
-		for i in range(self.n):
+		self.q[0] = q[0:3]
+		for i in range(1, self.n+1):
 			# Update node positions
-				n1 = q[3*i: 3*i+2]
-				n2 = q[3*(i+1): 3*(i+1)+2]
-				self.nodes[i] = n1
-				self.nodes[i+1] = n2
-			# Update connector positions
-				top_connector = q[3*i + 2 : 3*i + 4]
-				bottom_connector = q[3*i + 4 : 3*i + 6]
-				self.connectors[2*i] = top_connector
-				self.connectors[2*i+1] = bottom_connector
-			#Update springs 
-				self.springs["p1"][i] = n1
-				self.springs["p2"][i] = n2
-			#Update links
-				self.links[4*i]["p1"] = n1
-				self.links[4*i]["p2"] = top_connector
-				self.links[4*i+1]["p1"] = top_connector
-				self.links[4*i+1]["p2"] = n2
-				self.links[4*i+2]["p1"] = n1
-				self.links[4*i+2]["p2"] = bottom_connector
-				self.links[4*i+3]["p1"] = bottom_connector
-				self.links[4*i+3]["p2"] = n2
+			self.q[3*i] = q[3*i: 3*i+2]
+			self.q[3*i+1] = q[3*i+1: 3*i+3]
+			self.q[3*i+2] = q[3*i+2: 3*i+4]
+		
+	def plot_objects(self, ax=None, artists=None):
+		# Create axes if not given (for static plot)
+		if ax is None:
+			fig, ax = plt.subplots(figsize=(8,4))
 
-	def get_internal_state(self, k=None):
-		q = np.zeros(self.ndof)
-		stiffness_matrix = np.zeros((self.ne))
-		spring_index_matrix = np.zeros((self.ne, 4))
-		l0 = np.zeros(self.ne)
-			
+		# Extract current worm geometry
+		q_x = self.q[::3, 0]
+		q_y = self.q[::3, 1]
+
+		# connectors (top/bottom)
+		c_x = []
+		c_y = []
 		for i in range(self.n):
-			# Get node positions
-			n1 = self.nodes[i]
-			n2 = self.nodes[i+1] 
-			q[3*(i+1): 3*(i+1)+2] = n1
-			q[3*i: 3*i+2] = n2
-			# get connector positions
-			top_connector = self.connectors[2*i]
-			bottom_connector = self.connectors[2*i+1]
-			q[3*i + 2 : 3*i + 4] = top_connector 
-			q[3*i + 4 : 3*i + 6] = bottom_connector
-			# get spring info
-			stiffness_matrix[5*i] = self.springs["k"][i]
-			spring_index_matrix[5*i] = np.hstack([self.springs["p1"][i], self.springs["p2"][i]])
-			l0[5*i] = self.springs["l0"][i]
-			# get link info
-			stiffness_matrix[5*i+1] = self.links["k"][4*i]
-			spring_index_matrix[5*i+1] = np.hstack([self.links["p1"][4*i], self.links["p2"][4*i]])
-			l0[5*i+1] = self.links["l0"][4*i]
-			stiffness_matrix[5*i+2] = self.links["k"][4*i+1]
-			spring_index_matrix[5*i+2] = np.hstack([self.links["p1"][4*i+1], self.links["p2"][4*i+1]])
-			l0[5*i+2] = self.links["l0"][4*i+1]
-			stiffness_matrix[5*i+3] = self.links["k"][4*i+2]
-			spring_index_matrix[5*i+3] = np.hstack([self.links["p1"][4*i+2], self.links["p2"][4*i+2]])
-			l0[5*i+3] = self.links["l0"][4*i+2]
-			stiffness_matrix[5*i+4] = self.links["k"][4*i+3]
-			spring_index_matrix[5*i+4] = np.hstack([self.links["p1"][4*i+3], self.links["p2"][4*i+3]])
-			l0[5*i+4] = self.links["l0"][4*i+3]
+			c_x.append(self.q[3*i+1, 0])
+			c_y.append(self.q[3*i+1, 1])
+			c_x.append(self.q[3*i+2, 0])
+			c_y.append(self.q[3*i+2, 1])
 
-		if k is not None:
-			return spring_index_matrix
-		return q, stiffness_matrix, spring_index_matrix, l0
+		# spring endpoints
+		p1 = self.q[self.springs[:, 0]]
+		p2 = self.q[self.springs[:, 1]]
 
-	def plot(self):
-		# -------------------
-		# Nodes
-		q_x = self.nodes[:, 0]
-		q_y = self.nodes[:, 1]
+		spring_mask = np.zeros(len(self.springs), dtype=bool)
+		spring_mask[::5] = True
+		link_mask = ~spring_mask
 
-		# Connectors
-		c_x = self.connectors[:, 0]
-		c_y = self.connectors[:, 1]
+		# =====================================================
+		#  INIT MODE → CREATE ARTISTS
+		# =====================================================
+		if artists is None:
+			artists = {}
 
-		# Springs: extract endpoints
-		s_lines = np.array([[self.springs[i]["p1"], self.springs[i]["p2"]] for i in range(len(self.springs))])
-		s_x = s_lines[:, :, 0]
-		s_y = s_lines[:, :, 1]
+			artists["nodes"], = ax.plot(q_x, q_y, 'o', color='black', markersize=4)
+			artists["conn"], = ax.plot(c_x, c_y, 'o', color='green', markersize=4)
 
-		# Links: same as springs
-		l_lines = np.array([[self.links[i][0], self.links[i][1]] for i in range(len(self.links))])
-		l_x = l_lines[:, :, 0]
-		l_y = l_lines[:, :, 1]
-		
-		plt.figure(figsize=(8,4))
-		plt.plot(q_x, q_y, 'o', color='black')  # Nodes
-		plt.plot(c_x, c_y, 'o', color='green')  # Connectors
-		for i in range(len(s_lines)):
-				plt.plot(s_x[i], s_y[i], '-', color='red')  # Springs
-		for i in range(len(l_lines)):
-				plt.plot(l_x[i], l_y[i], '-', color='black')  # Links
-		# -------------------
-		
-		# Worm Profile (ellipses)
-		for i in range(len(q_x)-1):
-				# Top half-ellipse
-				a = (q_x[i] - q_x[i+1]) / 2
-				b = (c_y[2*i] - q_y[i]) / 2
-				h, k = (q_x[i+1] + q_x[i])/2, (c_y[2*i] + q_y[i])/2
-				theta = np.linspace(0, np.pi, 300)
-				x = h + a * np.cos(theta)
-				y = k + b * np.sin(theta)
-				plt.plot(x, y)
+			# Springs
+			artists["springs"] = [
+				ax.plot([], [], '-', color='red')[0] 
+				for _ in np.where(spring_mask)[0]
+			]
 
-				# Bottom half-ellipse
-				b = (q_y[i] - c_y[2*i+1]) / 2
-				k = (c_y[2*i+1] + q_y[i])/2
-				theta = np.linspace(np.pi, 2*np.pi, 300)
-				x = h + a * np.cos(theta)
-				y = k + b * np.sin(theta)
-				plt.plot(x, y)
-		
-		plt.title('Worm Configuration')
-		plt.xlabel('x')
-		plt.ylabel('y')
-		plt.axis('equal')
+			# Links
+			artists["links"] = [
+				ax.plot([], [], '-', color='black')[0] 
+				for _ in np.where(link_mask)[0]
+			]
+
+			# Ellipses
+			artists["top"] = [ax.plot([], [], '-', linewidth=1)[0] for _ in range(self.n)]
+			artists["bot"] = [ax.plot([], [], '-', linewidth=1)[0] for _ in range(self.n)]
+
+			# also update them immediately for static plot
+			self.plot_objects(ax=ax, artists=artists)
+			return artists
+
+		# =====================================================
+		#  UPDATE MODE → UPDATE ARTISTS
+		# =====================================================
+
+		# Update nodes & connectors
+		artists["nodes"].set_data(q_x, q_y)
+		artists["conn"].set_data(c_x, c_y)
+
+		# update springs
+		spring_indices = np.where(spring_mask)[0]
+		for j, i in enumerate(spring_indices):
+			artists["springs"][j].set_data([p1[i, 0], p2[i, 0]],
+										[p1[i, 1], p2[i, 1]])
+
+		# update links
+		link_indices = np.where(link_mask)[0]
+		for j, i in enumerate(link_indices):
+			artists["links"][j].set_data([p1[i, 0], p2[i, 0]],
+										[p1[i, 1], p2[i, 1]])
+
+		# update ellipses
+		for i in range(self.n):
+			a = (q_x[i] - q_x[i+1]) / 2
+			theta = np.linspace(0, np.pi, 200)
+
+			# top ellipse
+			b_top = (c_y[2*i] - q_y[i]) / 2
+			h = (q_x[i+1] + q_x[i])/2
+			k = (c_y[2*i] + q_y[i])/2
+			x = h + a*np.cos(theta)
+			y = k + b_top*np.sin(theta)
+			artists["top"][i].set_data(x, y)
+
+			# bottom ellipse
+			b_bot = (q_y[i] - c_y[2*i+1]) / 2
+			theta2 = np.linspace(np.pi, 2*np.pi, 200)
+			k2 = (q_y[i] + c_y[2*i+1])/2
+			x = h + a*np.cos(theta2)
+			y = k2 + b_bot*np.sin(theta2)
+			artists["bot"][i].set_data(x, y)
+
+		return artists
+
+	
+	def plot(self, ctime=0.0):
+		fig, ax = plt.subplots(figsize=(8,4))
+		self.plot_objects(ax=ax)  # init + update
+		ax.set_title(f'Worm Configuration, Time: {ctime:.2f} s')
+		ax.set_xlabel('x')
+		ax.set_ylabel('y')
+		ax.axis('equal')
 		plt.show()
+
+	def plot_springs(worm, t):
+		plt.figure()
+		plt.title(f"Spring Network (Time: {t:.2f} s)")
+		for _, ind in enumerate(worm.springs):
+			p1 = int(ind[0])
+			p2 = int(ind[1])
+			#print(p1, p2)
+			plt.plot([worm.q[p1, 0], worm.q[p2, 0]], [worm.q[p1, 1], worm.q[p2, 1]], 'bo-')
+			plt.xlabel("x (m)")
+			plt.ylabel("y (m)")
+			plt.axis("equal")
+		plt.grid(True)
+		plt.show()
+
+
+	def animate_worm(self, frames, times, save_dir="animations"):
+		"""
+		Parameters:
+		- worm: WormModel instance
+		- frames: list of q arrays from the solver
+		- times: corresponding time array from the solver
+		- save_dir: subdirectory to save GIF
+		- base_name: base filename (will append (1), (2), etc. if exists)
+		"""
+
+		# Ensure save directory exists
+		os.makedirs(save_dir, exist_ok=True)
+
+		# Generate unique filename
+		fname = self.name + "_anim.gif"
+		counter = 1
+		while os.path.exists(os.path.join(save_dir, fname)):
+			fname = f"{self.name}({counter}).gif"
+			counter += 1
+		filepath = os.path.join(save_dir, fname)
+
+		# Figure setup
+		fig, ax = plt.subplots(figsize=(8,4))
+		ax.set_xlabel("x")
+		ax.set_ylabel("y")
+		ax.set_xlim([-1, 2])
+		ax.set_ylim([-1, 1])
+		
+		# Plot objects
+		artists = self.plot_objects(ax=ax)
+
+		def flatten_artists(): # Helper to flatten artists dict to list for FuncAnimation
+			return [artists["nodes"], artists["conn"]] \
+				+ artists["springs"] \
+				+ artists["links"] \
+				+ artists["top"] \
+				+ artists["bot"]
+		
+		def init(): # Function to initialize animation
+			return flatten_artists()
+
+		def update(frame_idx):
+			q = frames[frame_idx]
+			self.q = q
+			self.plot_objects(ax=ax, artists=artists)  # update artists in place
+			return flatten_artists()
+
+		# Calculate fps based on simulation times
+		dt_sim = np.mean(np.diff(times))
+		fps = max(1, int(1/dt_sim))
+
+		ani = FuncAnimation(fig, update, frames=len(frames)-1,
+							init_func=init, blit=True, interval=1000/fps)
+
+		# Save as GIF
+		ani.save(filepath, writer=PillowWriter(fps=fps))
+		print(f"Animation saved to {filepath}")
+		
+		return ani
