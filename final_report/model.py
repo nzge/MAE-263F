@@ -100,7 +100,8 @@ class WormModel:
 		cot_theta = (deltaL/2) / h  # ≈ 1.15
 		k_spring = self.spring_k[0]  # horizontal spring stiffness
 		Fmax = k_spring * stretch_fraction * deltaL / (4 * cot_theta)
-		self.Fmax = Fmax
+		#self.Fmax = Fmax
+		self.Fmax = 10.0
 
 		# Radii of spheres
 		R = np.zeros(self.nv)

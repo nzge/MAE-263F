@@ -10,7 +10,7 @@ importlib.reload(obj)
 importlib.reload(contract)
 
    
-def solver(worm, dt, maxTime, tol, maximum_iter):
+def solver(worm, dt, maxTime, tol, maximum_iter, contractType = 'single_segment'):
     worm.q = worm.q0
     worm.u = worm.u0
 
@@ -23,7 +23,10 @@ def solver(worm, dt, maxTime, tol, maximum_iter):
         t_val = t[k]
         t_new = t[k+1]
         
-        F_contract = contract.getContract_single_segment(worm, t_new)
+        if contractType == 'single_segment':
+            F_contract = contract.getContract_single_segment(worm, t_new)
+        elif contractType == 'multiple_segments':
+            F_contract = contract.getContract(worm, t_new)
         
         if k % param.plotStep == 0:
             worm.plot(t_val)
@@ -58,16 +61,15 @@ def solver_with_predictor_corrector(worm, dt, maxTime, tol, maximum_iter, contra
         t_val = t[k]
         t_new = t[k+1]
         
+        if k % param.plotStep == 0:
+            worm.plot(t_val)
+        if k == len(t) - 2:
+            worm.plot(t_new)
+
         if contractType == 'single_segment':
             F_contract = contract.getContract_single_segment(worm, t_new)
         elif contractType == 'multiple_segments':
             F_contract = contract.getContract(worm, t_new)
-        
-        if k % param.plotStep == 0:
-            worm.plot(t_val)
-            # print('Force contract: ', contract.reshape(worm.nv, worm.dim))
-        if k == len(t) - 2:
-            worm.plot(t_new)
 
         q_new, u_new, flag, f = obj.objfun(worm, dt, tol, maximum_iter, F_contract)
         print('force residuals: ', f)

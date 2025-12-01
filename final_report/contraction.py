@@ -86,14 +86,10 @@ def getContract(worm, t=None, T_wave=2.0, wavelength=1.0, wave_type='traveling')
 
     return F_contract
 
-
 def getContract_single_segment(worm, t=None):
-    """
-    Original simple single-segment sinusoidal contraction (kept for reference).
-    """
+    """ Original simple single-segment sinusoidal contraction (kept for reference). """
     if t is None:
         t = 0.0
-
     F = 0.8 * np.sin(2.0 * np.pi * (t/2))
     F_contract = np.zeros(worm.ndof)
     
@@ -102,7 +98,6 @@ def getContract_single_segment(worm, t=None):
         F_contract[worm.dim * 2 + 1] = F
     except Exception:
         pass
-
     return F_contract
 
 class ContractionEngine_segmentdriven:
