@@ -1,5 +1,7 @@
 import numpy as np
 
+#-----------Worm Parameters------------#
+
 # Parameters for the worm model 
 length=1.0 # length of the worm
 n=6 # number of segments
@@ -15,8 +17,11 @@ visc = 1000.0 # Viscosity# Pa-s
 EI = Y * np.pi * r0**4 / 4
 EA = Y * np.pi * r0**2
 
-#-----------------------#
+#-----------Environment Parameters------------#
+mu_static=0.12
+mu_sliding=0.1
 
+#-----------Solver Parameters------------#
 
 # Time integration parameters
 tol = EI / length ** 2 * 1e-3 # Tolerance
@@ -32,3 +37,5 @@ totalTime = 5 # Total time # second
 saveImage = 0 # Set to 1 to save images
 n_plot = 5 
 plotStep = (totalTime/dt) / n_plot 
+
+

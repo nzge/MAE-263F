@@ -1,9 +1,14 @@
 import numpy as np
-import matplotlib.pyplot as plt
 import importlib
 
 import parameters as param
 importlib.reload(param)
+
+def getEnergy(worm, F_contract):
+    energy = 0.0
+    for i in range(worm.n):
+        energy += F_contract[3*i+1] * worm.q[3*i+1] + F_contract[3*i+2] * worm.q[3*i+2]
+    return energy
 
 def getContract(worm, t=None, T_wave=2.0, wavelength=1.0, wave_type='traveling'):
     """

@@ -90,9 +90,11 @@ class WormModel:
 		self.freeIndex = np.setdiff1d(np.arange(self.ndof), fixedDOFs) # All the DOFs are free except the fixed ones
 		self.fixedIndex = fixedDOFs # Fixed DOFs
 		self.isFixed = np.zeros(self.ndof)
-		self.groundPosition = np.min(self.q[:, 1]) - 0.10 # Location of ground along y axis
+		self.groundPosition = np.min(self.q[:, 1]) - 0.02 # Location of ground along y axis
 		
 		#-----------Forces------------#
+		self.workDone = np.zeros(self.ndof) # Work done by contraction
+		self.residuals = np.zeros(self.ndof) # Residuals for the force balance equation
 
 		"""Calculate safe Fmax based on geometry."""
 		deltaL = self.deltaL
@@ -184,20 +186,21 @@ class WormModel:
 		if artists is None:
 			artists = {}
 
+			artists["ground"], = ax.plot([-10, 10], [self.groundPosition, self.groundPosition], 'k-', linewidth=1)
+
+			# Nodes and Connectors
 			artists["nodes"], = ax.plot(q_x, q_y, 'o', color='black', markersize=4)
 			artists["conn"], = ax.plot(c_x, c_y, 'o', color='green', markersize=4)
 
 			# Springs
 			artists["springs"] = [
 				ax.plot([], [], '-', color='red')[0] 
-				for _ in np.where(spring_mask)[0]
-			]
+				for _ in np.where(spring_mask)[0] ]
 
 			# Links
 			artists["links"] = [
 				ax.plot([], [], '-', color='black')[0] 
-				for _ in np.where(link_mask)[0]
-			]
+				for _ in np.where(link_mask)[0] ]
 
 			# Ellipses
 			artists["top"] = [ax.plot([], [], '-', linewidth=1)[0] for _ in range(self.n)]
@@ -210,6 +213,7 @@ class WormModel:
 		# =====================================================
 		#  UPDATE MODE → UPDATE ARTISTS
 		# =====================================================
+
 
 		# Update nodes & connectors
 		artists["nodes"].set_data(q_x, q_y)
@@ -329,7 +333,7 @@ class WormModel:
 				+ artists["springs"] \
 				+ artists["links"] \
 				+ artists["top"] \
-				+ artists["bot"]
+				+ artists["bot"] 
 		
 		def init():
 			return flatten_artists()

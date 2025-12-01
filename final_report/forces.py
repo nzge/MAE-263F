@@ -1,32 +1,52 @@
-from helper import crossMat
-
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from IPython.display import clear_output, display # Only for iPython
+from IPython.display import display # Only for iPython
+import importlib
 
-def print_force_summary(worm, q_new, F_inertia, F_elastic, F_contract, f_residual, verbose=True, show_all=False):
-    """
-    Pretty-print force components and positions as a pandas DataFrame.
+import parameters as param
+importlib.reload(param)
+
+def getForceJacobian(q_new, q_old, u_old, dt, worm, contractionEngine):
+  
+  # Gravity
+  #W = worm.W
+
+  # Inertia
+  F_inertia = worm.m/dt * ((q_new - q_old) / dt - u_old)
+  J_inertia = worm.mMat / dt ** 2
+
+  # Elastic forces: Stretching and Bending
+  Fs, Js = getFs(worm, q_new)
+  #Fb, Jb = getFb(q_new, k, worm.deltaL)
+  Fb, Jb = 0, 0
+  F_elastic = Fs + Fb
+  J_elastic = Js + Jb
+
+  # Viscous force
+  #C = worm.c
+  #Fv = - C @ ( q_new - q_old ) / dt
+  #Jv = - C / dt
+  Fv = 0
+  Jv = 0
+
+  # Ground contact and friction
+  F_friction = getFriction(worm)
+
+  # Equations of motion
+  f = F_inertia - F_elastic - Fv - F_friction - contractionEngine
+  J = J_inertia - J_elastic - Jv  # Friction Jacobian often ignored
+
+  # Pretty-print force summary (set verbose=False to disable, show_all=True to see all DOFs)
+  print_force_summary(worm, q_new, F_inertia, F_elastic, contractionEngine, F_friction, f, verbose=False, show_all=False)
+  return f, J
+
+def print_force_summary(worm, q_new, F_inertia, F_elastic, F_contract, F_friction, f_residual, verbose=True, show_all=False):
     
-    Parameters:
-    -----------
-    worm : WormModel
-    q_new : ndarray
-        Current position vector (flattened DOFs)
-    F_inertia, F_elastic, F_contract, f_residual : ndarray
-        Force components
-    verbose : bool
-        If False, skip printing entirely
-    show_all : bool
-        If True, show all DOFs. If False, only show non-zero rows.
-    """
     if not verbose:
         return
     
     nv = worm.nv
-    # Build row labels: Node 0 X, Node 0 Y, Node 1 X, ...
-    labels = []
+    labels = []   # Build row labels: Node 0 X, Node 0 Y, Node 1 X, ...
     for i in range(nv):
         node_type = "main" if i % 3 == 0 else ("top" if i % 3 == 1 else "bot")
         labels.append(f"N{i} ({node_type}) X")
@@ -41,13 +61,14 @@ def print_force_summary(worm, q_new, F_inertia, F_elastic, F_contract, f_residua
         'F_inertia': F_inertia,
         'F_elastic': F_elastic,
         'F_contract': F_contract,
+        'F_friction': F_friction,
         'f_residual': f_residual,
         'status': fixed_marker
     }, index=labels)
     
     # Only show rows with non-zero values (for cleaner output) unless show_all=True
     if not show_all:
-        mask = (df[['F_inertia', 'F_elastic', 'F_contract', 'f_residual']].abs() > 1e-10).any(axis=1)
+        mask = (df[['F_inertia', 'F_elastic', 'F_contract', 'F_friction', 'f_residual']].abs() > 1e-10).any(axis=1)
         df_filtered = df[mask]
     else:
         df_filtered = df
@@ -64,38 +85,31 @@ def print_force_summary(worm, q_new, F_inertia, F_elastic, F_contract, f_residua
     print(f"Free DOF residual norm: {np.linalg.norm(f_residual[worm.freeIndex]):.2e}")
     print("="*80 + "\n")
 
-def getForceJacobian(q_new, q_old, u_old, dt, worm, contractionEngine):
-  m = worm.m
-  mMat = worm.mMat
-  W = worm.W
-  C = worm.c
-  deltaL = worm.deltaL
 
-  # Inertia
-  F_inertia = m/dt * ((q_new - q_old) / dt - u_old)
-  J_inertia = mMat / dt ** 2
+#-----------------------------------------------------------------------#
 
-  # Elastic forces: Stretching and Bending
-  Fs, Js = getFs(worm, q_new)
-  #Fb, Jb = getFb(q_new, k, deltaL)
-  Fb, Jb = 0, 0
-  F_elastic = Fs + Fb
-  J_elastic = Js + Jb
+def getFriction(worm):
+    F_friction = np.zeros(worm.ndof)
+    N = np.zeros(worm.ndof)
+    N = worm.residuals[worm.fixedIndex]
 
-  # Viscous force
-  #Fv = - C @ ( q_new - q_old ) / dt
-  #Jv = - C / dt
+    for node in range(worm.nv):
+        x_dof = 2 * node
+        y_dof = 2 * node + 1
 
-  Fv = 0
-  Jv = 0
-
-  # Equations of motion
-  f = F_inertia - F_elastic - Fv - contractionEngine
-  J = J_inertia - J_elastic - Jv
-
-  # Pretty-print force summary (set verbose=False to disable, show_all=True to see all DOFs)
-  print_force_summary(worm, q_new, F_inertia, F_elastic, contractionEngine, f, verbose=False, show_all=False)
-  return f, J
+        # === FRICTION FORCE ===
+        v_x = worm.u[x_dof] # Velocity in X direction
+        # Tangential force trying to move the node
+        # (This would be the X-component of elastic + contraction forces)
+        # For simplicity, use velocity-based friction:
+        if abs(v_x) > 1e-6:  # Sliding
+            # Kinetic friction opposes motion
+            F_friction[x_dof] = -param.mu_sliding * N[y_dof] * np.sign(v_x)
+        else:
+            # Static friction (simplified - just high resistance)
+            # In full implementation, you'd check if applied force exceeds μ_s * N
+            pass  # Static case handled by stick constraint or regularization
+    return F_friction
 
 # Spring
 def getFs(worm, q):
@@ -115,9 +129,7 @@ def getFs(worm, q):
 
     f_spring[indices] += gradEs(xi, yi, xj, yj, worm.spring_l0[i], stiffness)
     J_spring[np.ix_(indices,indices)] += hessEs(xi, yi, xj, yj, worm.spring_l0[i], stiffness)
-
   return f_spring, J_spring  # OUTSIDE the loop!
-
 
 def gradEs(xk, yk, xkp1, ykp1, l_k, k):
     """
@@ -399,3 +411,48 @@ def getFb(q, EI, deltaL):
     Jb[np.ix_(ind, ind)] -= hessEnergy # index vector: 0:6
 
   return Fb, Jb
+
+def getGroundContactAndFriction(worm, q_new, q_old, dt, ground_y=0.0, 
+                                 k_ground=1e4, mu_static=0.12, mu_sliding=0.1):
+    """
+    Compute ground contact (penalty) and Coulomb friction forces.
+    
+    Returns:
+        F_contact: normal contact force (Y direction)
+        F_friction: tangential friction force (X direction)
+        J_contact: Jacobian of contact force
+    """
+    F_contact = np.zeros(worm.ndof)
+    F_friction = np.zeros(worm.ndof)
+    J_contact = np.zeros((worm.ndof, worm.ndof))
+    
+    for node in range(worm.nv):
+        x_dof = 2 * node
+        y_dof = 2 * node + 1
+        
+        y_pos = q_new[y_dof]
+        penetration = ground_y - y_pos
+        
+        if penetration > 0:  # Node is in/below ground
+            # === NORMAL FORCE (penalty spring) ===
+            N = k_ground * penetration  # Positive = pushing up
+            F_contact[y_dof] = N
+            J_contact[y_dof, y_dof] = -k_ground
+            
+            # === FRICTION FORCE ===
+            # Velocity in X direction
+            v_x = (q_new[x_dof] - q_old[x_dof]) / dt
+            
+            # Tangential force trying to move the node
+            # (This would be the X-component of elastic + contraction forces)
+            # For simplicity, use velocity-based friction:
+            
+            if abs(v_x) > 1e-6:  # Sliding
+                # Kinetic friction opposes motion
+                F_friction[x_dof] = -mu_sliding * N * np.sign(v_x)
+            else:
+                # Static friction (simplified - just high resistance)
+                # In full implementation, you'd check if applied force exceeds μ_s * N
+                pass  # Static case handled by stick constraint or regularization
+    
+    return F_contact, F_friction, J_contact
