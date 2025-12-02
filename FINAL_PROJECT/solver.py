@@ -126,8 +126,8 @@ def solver_with_predictor_corrector(worm, dt, maxTime, tol, maximum_iter, contra
         
         displacement = q_new.flatten() - worm.q.flatten()
         work_step = F_contract.dot(displacement)
-        worm.workDone = np.append(worm.workDone, work_step)
-        
+        worm.COT = np.append(worm.COT, work_step)
+
         worm.q = q_new
         worm.u = u_new
         worm.residuals = f.copy()

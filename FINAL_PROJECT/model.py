@@ -93,7 +93,7 @@ class WormModel:
 		self.groundPosition = np.min(self.q[:, 1]) - 0.02 # Location of ground along y axis
 		
 		#-----------Forces------------#
-		self.workDone = np.zeros(self.ndof) # Work done by contraction
+		self.COT = np.zeros(self.ndof) # Cost of transport
 		self.residuals = np.zeros(self.ndof) # Residuals for the force balance equation
 
 		"""Calculate safe Fmax based on geometry."""
@@ -255,6 +255,19 @@ class WormModel:
 		return artists
 
 	
+	def plot_static(self, ctime=0.0):
+		fig, ax = plt.subplots(figsize=(8,4))
+		self.plot_objects(ax=ax)  # init + update
+		ax.set_title(f'Worm Configuration, Time: {ctime:.2f} s')
+		ax.set_xlabel('x')
+		ax.set_ylabel('y')
+		xspace = 0.2
+		yspace = 1.0
+		ax.set_xlim([np.min(self.q[:, 0]) - xspace*np.abs(np.max(self.q[:, 0])), np.max(self.q[:, 0])	+ xspace*np.abs(np.max(self.q[:, 0]))])
+		ax.set_ylim([np.min(self.q[:, 1]) - yspace*np.abs(np.min(self.q[:, 1])), np.max(self.q[:, 1])	+ yspace*np.abs(np.max(self.q[:, 1]))])
+		# ax.axis('equal')
+		plt.show()
+
 	def plot(self, ctime=0.0):
 		fig, ax = plt.subplots(figsize=(8,4))
 		self.plot_objects(ax=ax)  # init + update
