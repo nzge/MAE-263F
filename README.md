@@ -1,1 +1,1 @@
-# MAE 263F: Mechanics of Flexible Structures SoftRobots
+# MAE 263F: Mechanics of Flexible Structures Soft Robots
