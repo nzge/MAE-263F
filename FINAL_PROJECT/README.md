@@ -1,2 +1,3 @@
+docs: Sphinx documentation output
 
-main.ipynb: 
+_main.ipynb: main routine
