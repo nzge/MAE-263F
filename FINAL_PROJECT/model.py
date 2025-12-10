@@ -20,10 +20,14 @@ class WormModel:
 		self.springs = np.zeros((n_springs, 2), dtype=np.int32)  # [p1_idx, p2_idx] per spring
 		self.spring_k = np.zeros(n_springs)   # spring constants
 		self.spring_l0 = np.zeros(n_springs)  # rest lengths
-		
+		self.node_k = np.zeros(n_segments) # node bending constants
+
 		for i in range(1, n_segments+1):
 			node_index = 3*i
 			self.q[node_index] = [i * self.deltaL , 0.0, 0.0][:self.dim] # node position
+		
+		for i in range(1, n_segments):
+			self.node_k[i] = param.k_torsion # node bending constant
 
 		for i in range(n_segments):
 			node1_index = 3*i
@@ -42,11 +46,11 @@ class WormModel:
 			self.springs[5*i+2] = [top_connector_index, node2_index] # top right link
 			self.springs[5*i+3] = [node1_index, bot_connector_index] # bottom left link
 			self.springs[5*i+4] = [bot_connector_index, node2_index] # bottom right link
-			self.spring_k[5*i] = 13 # spring constant
-			self.spring_k[5*i+1] = 1e4 # link constant
-			self.spring_k[5*i+2] = 1e4 # link constant
-			self.spring_k[5*i+3] = 1e4 # link constant
-			self.spring_k[5*i+4] = 1e4 # link constant
+			self.spring_k[5*i] = param.k_spring # spring constant
+			self.spring_k[5*i+1] = param.k_link # link constant
+			self.spring_k[5*i+2] = param.k_link # link constant
+			self.spring_k[5*i+3] = param.k_link # link constant
+			self.spring_k[5*i+4] = param.k_link # link constant
 			self.spring_l0[5*i] = self.deltaL # rest length
 			self.spring_l0[5*i+1] = np.sqrt( (self.deltaL/2)**2 + (y_pos)**2 ) # rest length
 			self.spring_l0[5*i+2] = np.sqrt( (self.deltaL/2)**2 + (y_pos)**2 ) # rest length
@@ -89,26 +93,34 @@ class WormModel:
 		# Boundary Conditions # Set of all DOFs
 		self.freeIndex = np.setdiff1d(np.arange(self.ndof), fixedDOFs) # All the DOFs are free except the fixed ones
 		self.fixedIndex = fixedDOFs # Fixed DOFs
+		self.fixedDOFs = fixedDOFs # Fixed DOFs
 		self.isFixed = np.zeros(self.ndof)
 		self.groundPosition = np.min(self.q[:, 1]) - 0.02 # Location of ground along y axis
 		
-		#-----------Forces------------#
-		self.COT = np.zeros(self.ndof) # Cost of transport
-		self.residuals = np.zeros(self.ndof) # Residuals for the force balance equation
+		#-----------Cost of Transport------------#
+		self.com_xpos = [] # Center of mass position
+		self.COT = [] # Cost of transport
+		self.total_COT = 0.0 # Total cost of transport
+		self.cumulative_work = 0.0 # Cumulative work
+		self.cumulative_distance = 0.0 # Cumulative distance
 
+		#-----------Forces------------#
+		self.residuals = np.zeros(self.ndof) # Residuals for the force balance equation
+		self.residual_history = [] 
+
+		#-----------Fmax for Contracting------------#
 		"""Calculate safe Fmax based on geometry."""
 		deltaL = self.deltaL
 		h = np.sqrt((deltaL/2)**2 - (deltaL/4)**2)
 		cot_theta = (deltaL/2) / h  # ≈ 1.15
 		k_spring = self.spring_k[0]  # horizontal spring stiffness
 		Fmax = k_spring * stretch_fraction * deltaL / (4 * cot_theta)
-		#self.Fmax = Fmax
-		self.Fmax = 10.0
+		self.Fmax = 10.0 #self.Fmax = Fmax
 
 		# Radii of spheres
 		R = np.zeros(self.nv)
-		R_main = self.deltaL / 1000      # Radius for main nodes
-		R_connector = self.deltaL / 10000  # Radius for connectors (can set to 0 or small)
+		R_main = self.deltaL / 1000 # Radius for main nodes
+		R_connector = self.deltaL / 10000 # Radius for connectors (can set to 0 or small)
 		for k in range(self.nv):
 			if self.is_main_node[k]:
 				R[k] = R_main
@@ -118,11 +130,18 @@ class WormModel:
 
 		# Mass vector and matrix
 		m = np.zeros(self.dim * self.nv)
+		num_connectors = len(self.connector_indices)
+		connector_mass = 1e-10 / num_connectors if num_connectors > 0 else 0.0
+		
 		for k in range(self.nv):
 			if self.is_main_node[k] or self.connectors_have_mass:
-				node_mass = 4/3 * np.pi * R[k]**3 * param.rho_metal
+				#node_mass = param.total_mass / self.n
+				node_mass = 4/3 * np.pi * R[k]**3 * param.rho_material
 			else:
-				node_mass = 1e-10  # tiny mass for connectors (avoid division by zero)
+				# Connectors: use total mass divided by number of connectors
+				#node_mass = 1e-11
+				node_mass = connector_mass
+
 			m[self.dim*k] = node_mass
 			m[self.dim*k + 1] = node_mass
 		self.m = m
@@ -145,7 +164,18 @@ class WormModel:
 				C[2*k, 2*k] = 6.0 * np.pi * param.visc * R[k]
 				C[2*k+1, 2*k+1] = 6.0 * np.pi * param.visc * R[k]
 		self.c = C
-		
+
+	def reset(self):
+		"""Reset worm to initial state for a fresh simulation run."""
+		self.q = self.q0.copy()
+		self.u = self.u0.copy()
+		self.COT = []
+		self.residuals = np.zeros(self.ndof)
+		self.residual_history = []
+		self.cumulative_work = 0
+		self.cumulative_distance = 0
+		self.freeIndex = np.setdiff1d(np.arange(self.ndof), self.fixedDOFs)
+
 	def update_internal_state(self, q):
 		self.q[0] = q[0:3]
 		for i in range(1, self.n+1):
@@ -153,7 +183,7 @@ class WormModel:
 			self.q[3*i] = q[3*i: 3*i+2]
 			self.q[3*i+1] = q[3*i+1: 3*i+3]
 			self.q[3*i+2] = q[3*i+2: 3*i+4]
-		
+	
 	def plot_objects(self, ax=None, artists=None):
 		# Create axes if not given (for static plot)
 		if ax is None:
@@ -258,7 +288,7 @@ class WormModel:
 	def plot_static(self, ctime=0.0):
 		fig, ax = plt.subplots(figsize=(8,4))
 		self.plot_objects(ax=ax)  # init + update
-		ax.set_title(f'Worm Configuration, Time: {ctime:.2f} s')
+		ax.set_title(f'Worm Configuration: {self.name}, Time: {ctime:.2f} s')
 		ax.set_xlabel('x')
 		ax.set_ylabel('y')
 		xspace = 0.2
@@ -271,7 +301,7 @@ class WormModel:
 	def plot(self, ctime=0.0):
 		fig, ax = plt.subplots(figsize=(8,4))
 		self.plot_objects(ax=ax)  # init + update
-		ax.set_title(f'Worm Configuration, Time: {ctime:.2f} s')
+		ax.set_title(f'Worm Configuration: {self.name}, Time: {ctime:.2f} s')
 		ax.set_xlabel('x')
 		ax.set_ylabel('y')
 		ax.axis('equal')
@@ -279,7 +309,7 @@ class WormModel:
 
 	def plot_springs(worm, t):
 		plt.figure()
-		plt.title(f"Spring Network (Time: {t:.2f} s)")
+		plt.title(f"Spring Network: {worm.name}, Time: {t:.2f} s")
 		for _, ind in enumerate(worm.springs):
 			p1 = int(ind[0])
 			p2 = int(ind[1])
@@ -292,7 +322,7 @@ class WormModel:
 		plt.show()
 
 
-	def animate_worm(self, frames, times, save_dir="animations", target_fps=20, speedup=1.0):
+	def animate_worm(self, frames, times, save_dir="media/animations", target_fps=20, speedup=1.0):
 		"""
 		Parameters:
 		- frames: list of q arrays from the solver
@@ -365,3 +395,150 @@ class WormModel:
 		print(f"Animation saved to {filepath}")
 		
 		return ani
+	
+	def plot_simulation_results(self, frames, times, 
+	                            ax_first_node=None, ax_last_node=None, ax_com=None,
+	                            ax_cot_inst=None, ax_cot_cum=None, label_suffix=""):
+		"""
+		Plot position and COT data from simulation results.
+		Allows plotting multiple worms on the same axes by passing existing axes.
+		
+		Parameters:
+		-----------
+		frames : list
+			List of frame configurations from solver
+		times : list
+			List of corresponding times
+		ax_first_node : matplotlib.axes.Axes, optional
+			Axes for first node position plot. If None, creates new figure.
+		ax_last_node : matplotlib.axes.Axes, optional
+			Axes for last node position plot. If None, creates new figure.
+		ax_com : matplotlib.axes.Axes, optional
+			Axes for center of mass position plot. If None, creates new figure.
+		ax_cot_inst : matplotlib.axes.Axes, optional
+			Axes for instantaneous COT plot. If None, creates new figure.
+		ax_cot_cum : matplotlib.axes.Axes, optional
+			Axes for cumulative COT plot. If None, creates new figure.
+		label_suffix : str, optional
+			Suffix to add to labels (e.g., for distinguishing multiple worms)
+		
+		Returns:
+		--------
+		axes_dict : dict
+			Dictionary with keys: 'first_node', 'last_node', 'com', 'cot_inst', 'cot_cum'
+			Contains the axes objects (for reuse with other worms)
+		"""
+		
+		# Extract position data
+		first_node = [frame[0] for frame in frames]
+		first_node_xpos = [node[0] for node in first_node]
+		
+		last_node = [frame[-1] for frame in frames]
+		last_node_xpos = [node[0] for node in last_node]
+		last_node_xpos = [x - param.length for x in last_node_xpos]
+		
+		# Compute COM position (using main nodes only)
+		com_xpos = []
+		for frame in frames:
+			main_nodes = [frame[i] for i in self.main_node_indices]
+			com_x = np.mean([node[0] for node in main_nodes])
+			com_xpos.append(com_x)
+		
+		# COT data
+		cot_steps = np.array(self.COT)
+		cot_time = np.array(times)
+		cot_cumsum = np.cumsum(np.abs(cot_steps))
+		
+		# Helper function to create or use existing axes
+		def get_or_create_ax(ax, title, ylabel):
+			if ax is None:
+				fig, ax = plt.subplots(figsize=(8, 4))
+			else:
+				fig = ax.figure
+			if not ax.get_title():
+				ax.set_title(title)
+			if not ax.get_xlabel():
+				ax.set_xlabel('Time (s)')
+			if not ax.get_ylabel():
+				ax.set_ylabel(ylabel)
+			ax.grid(True, alpha=0.3)
+			return ax
+		
+		# Check if first_node and last_node should share the same axes
+		share_node_axes = (ax_first_node is not None and ax_last_node is not None and 
+		                  ax_first_node is ax_last_node)
+		
+		# First node position
+		if share_node_axes:
+			# Both use the same axes
+			ax_first = get_or_create_ax(ax_first_node, 'Node Positions vs Time', 'X Position (m)')
+			ax_first.plot(times, first_node_xpos, label=f'{self.name}: First Node{label_suffix}', 
+			              linestyle='-', marker='s', markersize=2)
+			ax_first.plot(times, last_node_xpos, label=f'{self.name}: Last Node - Worm Length{label_suffix}', 
+			             linestyle='-', marker='o', markersize=2)
+			ax_first.legend()
+			ax_last = ax_first  # Same axes
+		else:
+			# Separate axes
+			ax_first = get_or_create_ax(ax_first_node, 'First Node Position vs Time', 'X Position (m)')
+			ax_first.plot(times, first_node_xpos, label=f'{self.name}: First Node{label_suffix}', 
+			              linestyle='-', marker='s', markersize=2)
+			ax_first.legend()
+			
+			# Last node position
+			ax_last = get_or_create_ax(ax_last_node, 'Last Node Position vs Time', 'X Position (m)')
+			ax_last.plot(times, last_node_xpos, label=f'{self.name}: Last Node - Worm Length{label_suffix}', 
+			             linestyle='-', marker='o', markersize=2)
+			ax_last.legend()
+		
+		# COM position
+		ax_com_plot = get_or_create_ax(ax_com, 'Center of Mass Position vs Time', 'X Position (m)')
+		ax_com_plot.plot(times, com_xpos, label=f'{self.name}: COM{label_suffix}', 
+		                 linestyle='-', marker='^', markersize=2)
+		ax_com_plot.legend()
+		
+		# Check if COT plots should share the same axes
+		share_cot_axes = (ax_cot_inst is not None and ax_cot_cum is not None and 
+		                 ax_cot_inst is ax_cot_cum)
+		
+		# Instantaneous COT
+		if share_cot_axes:
+			# Both use the same axes
+			ax_cot_i = get_or_create_ax(ax_cot_inst, 'COT vs Time', 'COT')
+			ax_cot_i.plot(cot_time, cot_steps, label=f'{self.name}: Instantaneous COT{label_suffix}', 
+			              alpha=0.7, linestyle='-', marker='o', markersize=2)
+			ax_cot_i.plot(cot_time, cot_cumsum, label=f'{self.name}: Cumulative COT (∑|COT|){label_suffix}', 
+			              linestyle='-', linewidth=2)
+			ax_cot_i.legend()
+			ax_cot_c = ax_cot_i  # Same axes
+		else:
+			# Separate axes
+			ax_cot_i = get_or_create_ax(ax_cot_inst, 'Instantaneous COT vs Time', 'COT')
+			ax_cot_i.plot(cot_time, cot_steps, label=f'{self.name}: Instantaneous COT{label_suffix}', 
+			              alpha=0.7, linestyle='-', marker='o', markersize=2)
+			ax_cot_i.legend()
+			
+			# Cumulative COT
+			ax_cot_c = get_or_create_ax(ax_cot_cum, 'Cumulative COT vs Time', 'COT')
+			ax_cot_c.plot(cot_time, cot_cumsum, label=f'{self.name}: Cumulative COT (∑|COT|){label_suffix}', 
+			              linestyle='-', linewidth=2)
+			ax_cot_c.legend()
+		
+		# Print summary statistics
+		worm_name = getattr(self, 'name', 'Unknown')
+		if label_suffix and label_suffix.strip():
+			print(f'\n--- {worm_name} {label_suffix} ---')
+		else:
+			print(f'\n--- {worm_name} ---')
+		print(f'Total COT: {self.total_COT:.4f} J/(kg·m)')
+		print(f'Total mass: {self.m.sum():.2e} kg')
+		print(f'Cumulative distance: {self.cumulative_distance:.6f} m')
+		print(f'Cumulative work: {self.cumulative_work:.6f} J')
+		
+		return {
+			'first_node': ax_first,
+			'last_node': ax_last,
+			'com': ax_com_plot,
+			'cot_inst': ax_cot_i,
+			'cot_cum': ax_cot_c
+		}

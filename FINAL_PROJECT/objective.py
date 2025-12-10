@@ -10,6 +10,7 @@ def objfun(worm, dt, tol, maximum_iter, contract):
   q_old = worm.q.flatten()
   u_old = worm.u.flatten()
   q_new = q_old.copy()
+  #print(q_old)
 
   # Newton Raphson
   iter_count = 0

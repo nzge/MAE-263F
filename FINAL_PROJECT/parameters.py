@@ -6,16 +6,18 @@ import numpy as np
 length=1.0 # length of the worm
 n=6 # number of segments
  
-# Densities
-rho_metal = 10 # Density of metal # kg/m^3
+# Mass and density parameters
+total_mass = 0.01 # total mass of the worm # kg
+rho_material = 10 # Density of metal # kg/m^3
 rho_gl = 10 # kg/m^3
-rho = rho_metal  - rho_gl # Difference in density # kg/m^3
+rho = rho_material  - rho_gl # Difference in density # kg/m^3
 
-r0 = 1e-3 # Cross sectional radius # meter
-Y = 1e9 # Young's modulus # Pa
 visc = 1000.0 # Viscosity# Pa-s
-EI = Y * np.pi * r0**4 / 4
-EA = Y * np.pi * r0**2
+
+k_spring = 13 # spring constant
+k_link = 1e4 # link constant
+k_torsion = 0.3 # bend constant (gentle coupling between adjacent segments)
+stretch_fraction = 0.5 # stretch fraction
 
 #-----------Environment Parameters------------#
 mu_static=0.12
@@ -24,14 +26,12 @@ mu_sliding=0.1
 #-----------Solver Parameters------------#
 
 # Time integration parameters
-tol = EI / length ** 2 * 1e-3 # Tolerance
-dt = 0.01 # time step size
-total_time = 1.0 # total simulation time
+tol = k_torsion / length ** 2 * 1e-3 # Tolerance
 
 # Solver parameters
 maximum_iter = 100 # Maximum number of iterations
 dt = 0.01 # Time step # second
-totalTime = 5 # Total time # second
+totalTime = 10.0 # Total time # second
 
 # Variables related to plotting
 saveImage = 0 # Set to 1 to save images
