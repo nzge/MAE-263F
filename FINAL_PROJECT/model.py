@@ -99,10 +99,12 @@ class WormModel:
 		
 		#-----------Cost of Transport------------#
 		self.com_xpos = [] # Center of mass position
-		self.COT = [] # Cost of transport
+		self.cot_steps = [] # Cost of transport
+		self.cot_cumsum = [] # Cost of transport
 		self.total_COT = 0.0 # Total cost of transport
 		self.cumulative_work = 0.0 # Cumulative work
 		self.cumulative_distance = 0.0 # Cumulative distance
+		self.COT = 0.0 # Total cost of transport
 
 		#-----------Forces------------#
 		self.residuals = np.zeros(self.ndof) # Residuals for the force balance equation
@@ -131,16 +133,14 @@ class WormModel:
 		# Mass vector and matrix
 		m = np.zeros(self.dim * self.nv)
 		num_connectors = len(self.connector_indices)
-		connector_mass = 1e-10 / num_connectors if num_connectors > 0 else 0.0
+		num_main_nodes = len(self.main_node_indices)
 		
 		for k in range(self.nv):
 			if self.is_main_node[k] or self.connectors_have_mass:
-				#node_mass = param.total_mass / self.n
-				node_mass = 4/3 * np.pi * R[k]**3 * param.rho_material
+				#node_mass = 4/3 * np.pi * R[k]**3 * param.rho_material
+				node_mass = (param.total_mass - param.total_connector_mass) / num_main_nodes
 			else:
-				# Connectors: use total mass divided by number of connectors
-				#node_mass = 1e-11
-				node_mass = connector_mass
+				node_mass = param.total_connector_mass / num_connectors
 
 			m[self.dim*k] = node_mass
 			m[self.dim*k + 1] = node_mass
@@ -170,10 +170,14 @@ class WormModel:
 		self.q = self.q0.copy()
 		self.u = self.u0.copy()
 		self.COT = []
+		self.cot_steps = []
+		self.cot_cumsum = []
+		self.com_xpos = []
+		self.total_COT = 0.0
+		self.cumulative_work = 0.0
+		self.cumulative_distance = 0.0
 		self.residuals = np.zeros(self.ndof)
 		self.residual_history = []
-		self.cumulative_work = 0
-		self.cumulative_distance = 0
 		self.freeIndex = np.setdiff1d(np.arange(self.ndof), self.fixedDOFs)
 
 	def update_internal_state(self, q):
@@ -285,7 +289,7 @@ class WormModel:
 		return artists
 
 	
-	def plot_static(self, ctime=0.0):
+	def plot(self, ctime=0.0, state = None):
 		fig, ax = plt.subplots(figsize=(8,4))
 		self.plot_objects(ax=ax)  # init + update
 		ax.set_title(f'Worm Configuration: {self.name}, Time: {ctime:.2f} s')
@@ -293,19 +297,13 @@ class WormModel:
 		ax.set_ylabel('y')
 		xspace = 0.2
 		yspace = 1.0
-		ax.set_xlim([np.min(self.q[:, 0]) - xspace*np.abs(np.max(self.q[:, 0])), np.max(self.q[:, 0])	+ xspace*np.abs(np.max(self.q[:, 0]))])
-		ax.set_ylim([np.min(self.q[:, 1]) - yspace*np.abs(np.min(self.q[:, 1])), np.max(self.q[:, 1])	+ yspace*np.abs(np.max(self.q[:, 1]))])
-		# ax.axis('equal')
+		if state is not None:
+			ax.set_xlim([np.min(self.q[:, 0]) - xspace*np.abs(np.max(self.q[:, 0])), np.max(self.q[:, 0])	+ xspace*np.abs(np.max(self.q[:, 0]))])
+			ax.set_ylim([np.min(self.q[:, 1]) - yspace*np.abs(np.min(self.q[:, 1])), np.max(self.q[:, 1])	+ yspace*np.abs(np.max(self.q[:, 1]))])
+		else:
+			ax.axis('equal')
 		plt.show()
 
-	def plot(self, ctime=0.0):
-		fig, ax = plt.subplots(figsize=(8,4))
-		self.plot_objects(ax=ax)  # init + update
-		ax.set_title(f'Worm Configuration: {self.name}, Time: {ctime:.2f} s')
-		ax.set_xlabel('x')
-		ax.set_ylabel('y')
-		ax.axis('equal')
-		plt.show()
 
 	def plot_springs(worm, t):
 		plt.figure()
@@ -336,7 +334,7 @@ class WormModel:
 		os.makedirs(save_dir, exist_ok=True)
 
 		# Generate unique filename
-		fname = self.name + "_anim.gif"
+		fname = self.name + ".gif"
 		counter = 1
 		while os.path.exists(os.path.join(save_dir, fname)):
 			fname = f"{self.name}({counter}).gif"
@@ -444,9 +442,23 @@ class WormModel:
 			com_x = np.mean([node[0] for node in main_nodes])
 			com_xpos.append(com_x)
 		
-		# COT data
+		# COT data 
 		cot_steps = np.array(self.COT)
 		cot_time = np.array(times)
+
+		# === GUARD AGAINST MISMATCHED LENGTHS ===
+		if len(cot_steps) != len(cot_time):
+			min_len = min(len(cot_steps), len(cot_time))
+			if min_len == 0:
+				cot_steps = np.array([])
+				cot_time = np.array([])
+			else:
+				print(f"[plot_simulation_results] Warning: len(COT)={len(cot_steps)} "
+				      f"!= len(times)={len(cot_time)}; truncating to {min_len}.")
+				cot_steps = cot_steps[:min_len]
+				cot_time = cot_time[:min_len]
+		# ========================
+
 		cot_cumsum = np.cumsum(np.abs(cot_steps))
 		
 		# Helper function to create or use existing axes

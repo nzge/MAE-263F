@@ -7,7 +7,8 @@ length=1.0 # length of the worm
 n=6 # number of segments
  
 # Mass and density parameters
-total_mass = 0.01 # total mass of the worm # kg
+total_mass = 1e-8 # total mass of the worm # kg
+total_connector_mass = 1e-11
 rho_material = 10 # Density of metal # kg/m^3
 rho_gl = 10 # kg/m^3
 rho = rho_material  - rho_gl # Difference in density # kg/m^3

@@ -1,14 +1,11 @@
 import numpy as np
 import importlib
+import matplotlib.pyplot as plt
 
 import parameters as param
 importlib.reload(param)
 
-def getEnergy(worm, F_contract):
-    energy = 0.0
-    for i in range(worm.n):
-        energy += F_contract[3*i+1] * worm.q[3*i+1] + F_contract[3*i+2] * worm.q[3*i+2]
-    return energy
+
 
 def getContract(worm, t=None, T_wave=2.0, wavelength=1.0, wave_type='traveling'):
     """
@@ -89,8 +86,33 @@ def getContract(worm, t=None, T_wave=2.0, wavelength=1.0, wave_type='traveling')
             F_contract[top_y_dof] = -F_seg  # push top down
             F_contract[bot_y_dof] = +F_seg  # push bottom up
         
-
     return F_contract
+
+def plot_contract(worm, contract_params, time_elapsed = 10.0):
+    dt = 0.1 # Time step size
+    t = np.arange(0, time_elapsed + dt, dt)
+
+    F_history = np.zeros((len(t), worm.ndof))
+    for i, time in enumerate(t):
+        F_history[i] = getContract(
+            worm, 
+            t=time,
+            T_wave=contract_params.get('T_wave', 2.0),
+            wavelength=contract_params.get('wavelength', 1.0),
+            wave_type=contract_params.get('wave_type', 'traveling')
+        )
+
+    figure, ax = plt.subplots(figsize=(10, 4))
+    ax.plot(t , F_history[:, 3], 'o-', color='red', label='Segment 1, top')
+    ax.plot(t , F_history[:, 5], 'o-', color='blue', label='Segment 1, bottom')
+    ax.plot(t , F_history[:, 9], 'o-', color='green', label='Segment 3, top')
+    ax.plot(t , F_history[:, 11], 'o-', color='purple', label='Segment 3, bottom')
+    ax.plot(t , F_history[:, 15], 'o-', color='brown', label='Segment 5, top')
+    ax.plot(t , F_history[:, 17], 'o-', color='yellow', label='Segment 5, bottom')
+    ax.legend()
+    ax.set_xlabel('Time (s)')
+    ax.set_ylabel('Force (N)')
+    ax.set_title(f'Contractile Force vs Time for {contract_params.get("wave_type", "traveling")} wave')
 
 def getContract_single_segment(worm, t=None):
     """ Original simple single-segment sinusoidal contraction (kept for reference). """
